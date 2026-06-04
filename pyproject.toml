@@ -1,0 +1,23 @@
+[project]
+name = "gaa-students"
+version = "0.1.0"
+description = "Teaching edition of the GAA asset-allocation framework: code and data for the course notebooks."
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "matplotlib",
+    "scipy",
+    "cvxpy",
+    "statsmodels",
+    "ipykernel",
+    "jupyterlab",
+]
+
+# The framework packages (analytics, backtesting, optimization, risk_models,
+# signals, taa, data) are imported directly from the repo root by the
+# notebooks — this project only provides the virtual environment, it is not
+# itself an installable package.
+[tool.uv]
+package = false
