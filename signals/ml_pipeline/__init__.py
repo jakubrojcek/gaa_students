@@ -1,7 +1,11 @@
-"""signals.ml_pipeline — backtest validation schemes used by the course notebooks.
+"""signals.ml_pipeline — backtest validation, Backtester-driven.
 
-Walk-forward analysis, combinatorial purged cross-validation (CPCV), and the
-stationary-bootstrap reality check / SPA test.
+A strategy-agnostic parameter-grid research harness (:class:`ParameterGrid` plus
+a strategy factory), the self-refitting :class:`WalkForwardStrategy`,
+combinatorial purged cross-validation (CPCV), and the stationary-bootstrap
+reality check / SPA test.  A single full-sample backtest per grid cell is cached
+and reused (sliced) by every scheme, so each reported number flows through
+:class:`backtesting.Backtester`.
 """
 
 from signals.ml_pipeline.combinatorial_purged_cv import (
@@ -19,29 +23,43 @@ from signals.ml_pipeline.reality_check import (
     stationary_bootstrap_indices,
     whites_reality_check,
 )
+from signals.ml_pipeline.signal_research_pipeline import (
+    CellParams,
+    ParameterGrid,
+    ResearchResult,
+    SignalResearchPipeline,
+    backtest_param_cells,
+    backtest_window,
+    backtested_trial_matrix,
+    select_best_param_cell,
+)
 from signals.ml_pipeline.walk_forward import (
-    FitPredictStrategy,
-    WalkForwardResult,
+    WalkForwardStrategy,
     WalkForwardWindow,
     make_train_test_windows,
-    walk_forward_strategy_returns,
 )
 
 __all__ = [
     "CPCVResult",
     "CPCVSplit",
+    "CellParams",
     "CombinatorialPurgedCV",
-    "FitPredictStrategy",
+    "ParameterGrid",
     "RealityCheckResult",
+    "ResearchResult",
     "SPAResult",
-    "WalkForwardResult",
+    "SignalResearchPipeline",
+    "WalkForwardStrategy",
     "WalkForwardWindow",
+    "backtest_param_cells",
+    "backtest_window",
+    "backtested_trial_matrix",
     "hansens_spa",
     "make_train_test_windows",
     "reconstruct_paths",
     "relative_performance",
     "run_cpcv",
+    "select_best_param_cell",
     "stationary_bootstrap_indices",
-    "walk_forward_strategy_returns",
     "whites_reality_check",
 ]

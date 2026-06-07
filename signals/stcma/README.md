@@ -1,35 +1,41 @@
 # signals.stcma
 
-Momentum signals expressed as portfolio construction rules.
+Momentum signals expressed as backtester `Strategy` objects, so every reported
+number flows through `backtesting.Backtester`.
 
 ## Contents
 
 - `momentum.py`
-  - `time_series_momentum_returns(returns, lookback)` — position = sign of the trailing
-    `lookback`-period return, applied to the next period (causal, ∈ {−1, 0, +1}).
-  - `cross_sectional_momentum_weights(returns, lookback, quantile, long_only=True)` — rank assets
-    by trailing return, hold the top quantile with rank-scaled weights summing to 1.
-  - `cross_sectional_momentum_returns(...)` — the resulting strategy return series.
-  - `TimeSeriesMomentum(lookbacks)` / `CrossSectionalMomentum(lookbacks, quantiles, long_only=True)`
-    — parameterised strategy objects with `.param_grid()`, `.strategy_returns(R, **params)`, and
-    `.fit(R, dates)` → `.selected_params_`. These plug straight into `signals.ml_pipeline`.
+  - `time_series_momentum_returns(returns, lookback)` — pure signal-to-returns
+    map: position = sign of the trailing `lookback`-period return, applied to the
+    next period (causal, ∈ {−1, 0, +1}). Kept as a diagnostic benchmark.
+  - `TimeSeriesMomentum(lookback)` — single-asset trend follower implementing the
+    `Strategy` protocol (`compute_weights`); with `BacktestConfig(long_short=True)`
+    it is a fully long / flat / short single-asset book.
+  - `CrossSectionalMomentum(lookback, quantile, long_only=False, leg_weighting=...)`
+    — ranks assets by trailing return and forms the long/short (or, with
+    `long_only=True`, fully-invested long-only) momentum portfolio.
+  - `time_series_momentum_factory` / `cross_sectional_momentum_factory` — build a
+    concrete strategy from one `ParameterGrid` cell; handed to the validation
+    helpers in `signals.ml_pipeline`.
+- `signal_strategy.py` — `cross_sectional_weights` (the ranking → weights map),
+  the `LegWeighting` options, and `SignalStrategy` (a generic `Signal` → `Strategy`
+  adapter).
 
 ## Example
 
 ```python
-from signals.stcma import (
-    TimeSeriesMomentum, time_series_momentum_returns, cross_sectional_momentum_weights,
+from backtesting import BacktestConfig, Backtester
+from signals.stcma import TimeSeriesMomentum, CrossSectionalMomentum
+
+# single-asset trend follower as an engine Strategy
+bt = Backtester(BacktestConfig(long_short=True)).run(
+    prices=eq_prices, strategy=TimeSeriesMomentum(lookback=12)
 )
 
-# single-asset time-series momentum
-strat_ret = time_series_momentum_returns(eq_returns, lookback=12)
-
-# long-only cross-sectional momentum weights (top 30%, rank-scaled)
-W = cross_sectional_momentum_weights(panel_returns, lookback=12, quantile=0.3, long_only=True)
-
-# as a tunable object for walk-forward / CPCV
-ts = TimeSeriesMomentum([3, 6, 9, 12, 18, 24])
-trials = {f"lb{p['lookback']}": ts.strategy_returns(eq_returns, **p) for p in ts.param_grid()}
+# long-only cross-sectional momentum (top 30%, equal-weighted legs)
+xs = CrossSectionalMomentum(lookback=12, quantile=0.3, long_only=True)
+weights = xs.compute_weights(panel_prices, panel_prices.index[-1], None)
 ```
 
 See `AssetAllocation5_TAA.ipynb`.

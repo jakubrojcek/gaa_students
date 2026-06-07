@@ -5,6 +5,11 @@ Minimal data helpers for the notebooks. (The market-data panels themselves —
 
 ## Contents
 
+- `perf_loader.py` — convenience loaders for the bundled performance panels:
+  - `load_returns(assets, frequency="M", balanced_panel=True)` — simple-return (`-r`) panel;
+    `balanced_panel=True` keeps only fully-populated rows.
+  - `load_single_returns(asset, frequency="M")` — one asset's return series.
+  - `load_prices(assets, frequency="M")` — price-level (`-i`) panel fed to `backtesting.Backtester`.
 - `generate_data.py`
   - `unsmooth_Geltner(returns, max_beta=None)` — invert an AR(1) appraisal-smoothing filter
     (Geltner et al. 1994) to recover the volatility of illiquid / appraisal-based series.

@@ -10,6 +10,11 @@ Performance and risk metrics for a price (or NAV) panel.
     `calc_sharpe_ratio`, `calc_sharpe_ratio_rf0`, `calc_sortino_ratio`, `calc_max_drawdown`,
     `probabilistic_sharpe_ratio_from_returns`, `deflated_sharpe_ratio_from_returns`,
     `infer_periods_per_year`.
+- `strategy_analyzer.py`
+  - `StrategyAnalyzer` — strategy-vs-benchmark analytics on a backtest result:
+    active-return metrics (information ratio, tracking error, beta / alpha),
+    accumulated transaction costs, and the rolling information coefficient. Used by
+    the validation harness in `signals.ml_pipeline`.
 
 The analyzer derives returns internally (`pct_change`) and annualises by inferring the data
 frequency from the `DatetimeIndex`. Pass `risk_free_col` to use a series as a dynamic risk-free

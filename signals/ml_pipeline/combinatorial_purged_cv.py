@@ -36,6 +36,7 @@ windows.  Two guards are applied to every split:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import combinations
 from math import comb, sqrt
@@ -44,7 +45,18 @@ import numpy as np
 import pandas as pd
 
 from analytics.timeseries_analyzer import infer_periods_per_year
-from signals.ml_pipeline.walk_forward import FitPredictStrategy
+from backtesting.backtest_engine import BacktestConfig
+from backtesting.strategy_protocols import Strategy
+from signals.ml_pipeline.signal_research_pipeline import (
+    CellParams,
+    ParameterGrid,
+    backtest_param_cells,
+    backtest_window,
+    cell_param_values,
+    max_grid_lookback,
+    override_backtest_config,
+    select_best_param_cell,
+)
 
 
 @dataclass(frozen=True)
@@ -115,7 +127,9 @@ class CombinatorialPurgedCV:
                 f"Need at least n_groups={self.n_groups} observations, got {n}."
             )
         # Contiguous, near-equal groups of positional indices.
-        group_positions = [np.asarray(g) for g in np.array_split(np.arange(n), self.n_groups)]
+        group_positions = [
+            np.asarray(g) for g in np.array_split(np.arange(n), self.n_groups)
+        ]
         embargo_len = int(np.ceil(self.embargo_pct * n))
 
         splits: list[CPCVSplit] = []
@@ -125,9 +139,7 @@ class CombinatorialPurgedCV:
             blocked = self._purge_and_embargo(test_pos, n, embargo_len)
             train_pos = np.setdiff1d(np.arange(n), blocked, assume_unique=False)
 
-            test_groups = {
-                g: index[group_positions[g]] for g in combo
-            }
+            test_groups = {g: index[group_positions[g]] for g in combo}
             splits.append(
                 CPCVSplit(
                     test_group_ids=combo,
@@ -185,7 +197,11 @@ class CPCVResult:
     ----------
     paths : pd.DataFrame
         ``φ`` columns (``path_0 ...``), each a full-length OOS per-period
-        return series recombined from the test-group predictions.
+        backtest-return series recombined from the test-group segments.
+    path_navs : pd.DataFrame
+        Cumulative NAV of each path (``(1 + r).cumprod()``).  Because a path
+        stitches segments from non-adjacent groups, the NAV is rebuilt from the
+        recombined *returns* so it has no jumps at group boundaries.
     path_sharpes : pd.Series
         Annualised Sharpe of each path — the distribution of headline
         performance the backtest could have produced.
@@ -197,6 +213,7 @@ class CPCVResult:
     """
 
     paths: pd.DataFrame
+    path_navs: pd.DataFrame
     path_sharpes: pd.Series
     selected_params: pd.DataFrame
     n_groups: int
@@ -236,27 +253,37 @@ def reconstruct_paths(
 
 
 def run_cpcv(
-    strategy: FitPredictStrategy,
-    returns: pd.Series | pd.DataFrame,
+    strategy_factory: Callable[[CellParams], Strategy],
+    grid: ParameterGrid,
+    prices: pd.DataFrame,
+    base_config: BacktestConfig,
     n_groups: int = 6,
     n_test_groups: int = 2,
     embargo_pct: float = 0.01,
     label_horizon: int = 1,
     periods_per_year: float | None = None,
 ) -> CPCVResult:
-    """Run CPCV end to end and return the distribution of path Sharpes.
+    """Run CPCV end to end through the backtest engine.
 
-    For every combination the strategy is refit on the purged train index and
-    used to predict each held-out group; the predictions are recombined into
-    ``φ`` OOS paths whose annualised Sharpes form the reported distribution.
+    For every combination the best parameter cell is chosen on the purged train
+    index (highest annualised train Sharpe over ``grid``); the winning strategy
+    is then backtested over each held-out group with full-history warm-up.  The
+    per-group OOS segments are recombined into ``φ`` paths whose annualised
+    Sharpes form the reported distribution, and each path NAV is rebuilt from its
+    recombined returns so it is free of group-boundary jumps.
 
     Parameters
     ----------
-    strategy : FitPredictStrategy
-        Object with ``fit`` / ``predict`` (see
-        :class:`signals.stcma.momentum.TimeSeriesMomentum`).
-    returns : pd.Series | pd.DataFrame
-        Full-sample returns driving the strategy.
+    strategy_factory : Callable[[CellParams], Strategy]
+        Builds a concrete engine ``Strategy`` from one grid cell (e.g.
+        :func:`signals.stcma.momentum.time_series_momentum_factory`).
+    grid : ParameterGrid
+        Parameter grid searched on every combination's train block.  A swept
+        ``lookback`` sets the minimum purged-train length each split must retain.
+    prices : pd.DataFrame
+        Price-level history (``-i`` columns) for the whole sample.
+    base_config : BacktestConfig
+        Backtest settings; each cell's ``backtest`` overrides are applied on top.
     n_groups, n_test_groups, embargo_pct, label_horizon
         Forwarded to :class:`CombinatorialPurgedCV`.
     periods_per_year : float | None
@@ -273,20 +300,41 @@ def run_cpcv(
         embargo_pct=embargo_pct,
         label_horizon=label_horizon,
     )
-    splits = cv.split(returns.index)
-    ppy = periods_per_year or infer_periods_per_year(returns.index)
+    splits = cv.split(prices.index)
+    ppy = periods_per_year or infer_periods_per_year(prices.index)
+    max_lookback = max_grid_lookback(grid)
 
+    cell_returns = backtest_param_cells(grid, strategy_factory, prices, base_config)
     group_segments: dict[int, list[pd.Series]] = {g: [] for g in range(n_groups)}
-    param_rows: dict[tuple[int, ...], dict[str, float | int]] = {}
+    param_rows: dict[tuple[int, ...], dict[str, object]] = {}
     for split in splits:
-        strategy.fit(returns, split.train_index)
-        param_rows[split.test_group_ids] = dict(
-            getattr(strategy, "selected_params_", None) or {}
+        if len(split.train_index) < max_lookback:
+            raise ValueError(
+                f"CPCV split testing groups {split.test_group_ids} leaves only "
+                f"{len(split.train_index)} purged train observations, fewer than "
+                f"the grid's max lookback ({max_lookback}). Reduce n_groups / "
+                "label_horizon or shorten the lookback grid."
+            )
+        best_cell, _ = select_best_param_cell(
+            grid,
+            strategy_factory,
+            prices,
+            base_config,
+            metric_index=split.train_index,
+            periods_per_year=ppy,
+            cell_returns=cell_returns,
         )
+        param_rows[split.test_group_ids] = cell_param_values(best_cell)
+        strategy = strategy_factory(best_cell)
+        config = override_backtest_config(base_config, best_cell)
         for g in split.test_group_ids:
-            group_segments[g].append(strategy.predict(returns, split.test_groups[g]))
+            segment = backtest_window(
+                strategy, prices, split.test_groups[g], config
+            ).returns
+            group_segments[g].append(segment)
 
     paths = reconstruct_paths(group_segments, cv.n_paths)
+    path_navs = (1.0 + paths.fillna(0.0)).cumprod()
     path_sharpes = paths.apply(lambda col: _annualised_sharpe(col, ppy))
 
     selected_params = pd.DataFrame.from_dict(param_rows, orient="index")
@@ -296,6 +344,7 @@ def run_cpcv(
 
     return CPCVResult(
         paths=paths,
+        path_navs=path_navs,
         path_sharpes=path_sharpes,
         selected_params=selected_params,
         n_groups=n_groups,
